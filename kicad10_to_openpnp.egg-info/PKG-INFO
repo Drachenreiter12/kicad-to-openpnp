@@ -1,5 +1,7 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: kicad10-to-openpnp
-Version: 1.0.0
+Version: 1.0.1
 Summary: KiCad 6-10 footprint and board converter for OpenPnP packages and parts
 Requires-Python: >=3.10
+License-File: LICENSE
+Dynamic: license-file

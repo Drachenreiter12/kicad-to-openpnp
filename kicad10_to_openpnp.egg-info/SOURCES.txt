@@ -1,3 +1,4 @@
+LICENSE
 README.md
 kicad_to_openpnp.py
 pyproject.toml

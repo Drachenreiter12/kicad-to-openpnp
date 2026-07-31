@@ -9,6 +9,7 @@ normal CPython 3.10+ as well as KiCad's bundled Python.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -199,7 +200,40 @@ def write_xml(root: ET.Element, output: Path) -> None:
     output.write_text(ET.tostring(root, encoding="unicode") + "\n", encoding="utf-8")
 
 
+def read_join_files(paths: Sequence[Path]) -> dict[str, ET.Element]:
+    """Read existing OpenPnP libraries keyed by their root element name."""
+    roots: dict[str, ET.Element] = {}
+    valid_roots = {"openpnp-packages", "openpnp-parts"}
+    for path in paths:
+        try:
+            root = ET.parse(path).getroot()
+        except ET.ParseError as error:
+            raise ValueError(f"{path}: invalid XML: {error}") from error
+        if root.tag not in valid_roots:
+            raise ValueError(f"{path}: expected an OpenPnP packages.xml or parts.xml file")
+        if root.tag in roots:
+            raise ValueError(f"more than one --join file contains <{root.tag}>")
+        roots[root.tag] = root
+    return roots
+
+
+def joined_root(tag: str, entity_tag: str, generated: Sequence[ET.Element], existing: ET.Element | None) -> ET.Element:
+    """Keep existing entities unchanged and add generated entities by unused ID."""
+    result = ET.Element(tag, existing.attrib if existing is not None else {})
+    existing_ids: set[str] = set()
+    if existing is not None:
+        for element in existing:
+            result.append(deepcopy(element))
+            if element.tag == entity_tag and element.get("id"):
+                existing_ids.add(element.get("id", ""))
+    for element in generated:
+        if element.get("id") not in existing_ids:
+            result.append(element)
+    return result
+
+
 def read_input(path: Path) -> list[Footprint]:
+    """Read a board, one footprint, or every footprint in a .pretty library."""
     files = sorted(path.glob("*.kicad_mod")) if path.is_dir() else [path]
     if not files:
         raise ValueError(f"no .kicad_mod files found in {path}")
@@ -217,13 +251,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", nargs="?", type=Path, help=".kicad_mod, .kicad_pcb, or directory of .kicad_mod files")
     parser.add_argument("--input", "-i", dest="input_option", type=Path, help="input path (legacy spelling)")
+    parser.add_argument("--footprint", "--single-footprint", "-f", type=Path, metavar="PATH",
+                        help="convert one .kicad_mod footprint to an OpenPnP packages XML file")
+    parser.add_argument("--library", "--footprint-library", "-l", type=Path, metavar="PATH",
+                        help="convert every .kicad_mod in a KiCad .pretty library to OpenPnP packages")
     parser.add_argument("--packages", "--output", "-o", type=Path, help="packages output (default: packages.new.xml)")
     parser.add_argument("--parts", type=Path, help="parts output (default for boards: parts.new.xml)")
     parser.add_argument("--no-parts", action="store_true", help="do not create parts.new.xml for board input")
+    parser.add_argument("--join", type=Path, action="append", default=[], metavar="XML",
+                        help="preserve definitions from an existing packages.xml or parts.xml (repeat for both)")
     args = parser.parse_args(argv)
-    if args.input and args.input_option:
-        parser.error("use either the positional input or --input, not both")
-    input_path = args.input or args.input_option
+    input_sources = [source for source in (args.input, args.input_option, args.footprint, args.library) if source is not None]
+    if len(input_sources) > 1:
+        parser.error("use exactly one input: positional input, --input, --footprint, or --library")
+    input_path = input_sources[0] if input_sources else None
     if input_path is None:
         parser.error("an input path is required")
     packages = args.packages or Path("packages.new.xml")
@@ -233,14 +274,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.no_parts and args.parts:
         parser.error("--no-parts cannot be used with --parts")
     try:
+        if args.footprint is not None:
+            if input_path.suffix.lower() != ".kicad_mod" or input_path.is_dir():
+                raise ValueError("--footprint requires a .kicad_mod file")
+        if args.library is not None:
+            if not input_path.is_dir() or input_path.suffix.lower() != ".pretty":
+                raise ValueError("--library requires a KiCad .pretty directory")
+        joins = read_join_files(args.join)
+        for join in args.join:
+            if join.resolve() in {packages.resolve(), *( [parts.resolve()] if parts else [])}:
+                raise ValueError(f"--join input {join} must not be the same as an output file")
+        if "openpnp-parts" in joins and parts is None:
+            raise ValueError("a joined parts.xml file requires board input with parts output enabled")
         footprints = read_input(input_path)
         usable = [footprint for footprint in footprints if footprint.pads]
-        package_root = ET.Element("openpnp-packages")
         package_by_id: dict[str, Footprint] = {}
         for footprint in usable:
             package_by_id.setdefault(package_id(footprint.name), footprint)
-        for footprint in package_by_id.values():
-            package_root.append(package_element(footprint))
+        package_root = joined_root("openpnp-packages", "package",
+                                   [package_element(footprint) for footprint in package_by_id.values()],
+                                   joins.get("openpnp-packages"))
         write_xml(package_root, packages)
         if parts:
             if input_path.suffix.lower() != ".kicad_pcb":
@@ -255,8 +308,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"({existing.get('package-id')} and {part.get('package-id')}); "
                         "give the components distinct part-number values"
                     )
-            part_root = ET.Element("openpnp-parts")
-            part_root.extend(parts_by_id.values())
+            part_root = joined_root("openpnp-parts", "part", list(parts_by_id.values()), joins.get("openpnp-parts"))
             write_xml(part_root, parts)
     except (OSError, ValueError) as error:
         parser.error(str(error))
