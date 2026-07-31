@@ -1,0 +1,98 @@
+import subprocess
+import sys
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+
+SCRIPT = Path(__file__).parents[1] / "kicad_to_openpnp.py"
+
+
+def run(tmp_path, text, extra=()):
+    source = tmp_path / "demo.kicad_mod"
+    output = tmp_path / "packages.xml"
+    source.write_text(text)
+    completed = subprocess.run([sys.executable, str(SCRIPT), "-i", str(source), "-o", str(output), *extra], capture_output=True, text=True)
+    if completed.returncode:
+        raise AssertionError(completed.stderr)
+    return ET.parse(output).getroot()
+
+
+class ConverterTests(unittest.TestCase):
+    def test_current_kicad_pads_are_openpnp_compatible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = run(Path(directory), '''(footprint "Demo" (version 20240108) (generator pcbnew)
+      (pad "1" smd roundrect (at -1 2 90) (size 0.8 1.2) (layers "F.Cu") (roundrect_rratio 0.25))
+      (pad "2" smd circle (at 1 -2) (size 0.6 0.6) (layers "F.Cu"))
+      (pad "3" smd oval (at 0 0) (size 2 1) (layers "F.Cu")))''')
+            pads = root.findall("./package/footprint/pad")
+            self.assertEqual([pad.attrib["name"] for pad in pads], ["1", "2", "3"])
+            self.assertEqual(pads[0].attrib, {"name": "1", "x": "-1", "y": "-2", "width": "0.8", "height": "1.2", "rotation": "90", "mark": "true", "roundness": "50"})
+            self.assertEqual(pads[1].attrib["roundness"], "100")
+            self.assertEqual(pads[2].attrib["height"], "1")  # old tool lost this for circles
+
+
+    def test_directory_input_ignores_non_footprints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            (tmp_path / "a.kicad_mod").write_text('(footprint "A" (pad "1" smd rect (at 0 0) (size 1 1)))')
+            (tmp_path / "notes.txt").write_text("not a footprint")
+            output = tmp_path / "packages.xml"
+            completed = subprocess.run([sys.executable, str(SCRIPT), "-i", str(tmp_path), "-o", str(output)], capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(ET.parse(output).find("./package").attrib["id"], "A")
+
+    def test_board_creates_deduplicated_parts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            board = tmp_path / "demo.kicad_pcb"
+            packages, parts = tmp_path / "packages.xml", tmp_path / "parts.xml"
+            board.write_text('''(kicad_pcb (version 20240108) (generator pcbnew)
+              (footprint "Resistor_SMD:R_0603" (property "Reference" "R1") (property "Value" "10k") (pad "1" smd rect (at 0 0) (size 1 1)))
+              (footprint "Resistor_SMD:R_0603" (property "Reference" "R2") (property "Value" "10k") (pad "1" smd rect (at 0 0) (size 1 1))))''')
+            completed = subprocess.run([sys.executable, str(SCRIPT), "-i", str(board), "-o", str(packages), "--parts", str(parts)], capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(ET.parse(parts).findall("part")[0].attrib["package-id"], "R_0603")
+
+    def test_board_defaults_match_pipx_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            board = tmp_path / "demo.kicad_pcb"
+            board.write_text('''(kicad_pcb (version 20240108) (generator pcbnew)
+              (footprint "Resistor_SMD:R_0603" (property "Reference" "R1") (property "Value" "10k") (pad "1" smd rect (at 0 0) (size 1 1))))''')
+            completed = subprocess.run([sys.executable, str(SCRIPT), str(board)], cwd=tmp_path, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue((tmp_path / "packages.new.xml").is_file())
+            self.assertTrue((tmp_path / "parts.new.xml").is_file())
+
+    def test_join_preserves_existing_definitions_and_adds_new_ones(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            source = tmp_path / "demo.kicad_mod"
+            existing = tmp_path / "packages.xml"
+            output = tmp_path / "packages.new.xml"
+            source.write_text('(footprint "New" (pad "1" smd rect (at 0 0) (size 1 1)))')
+            existing.write_text('''<openpnp-packages>
+              <package version="1.1" id="Existing" description="keep me"><footprint units="Millimeters"/></package>
+              <package version="1.1" id="New" description="do not replace"><footprint units="Millimeters"/></package>
+            </openpnp-packages>''')
+            completed = subprocess.run([sys.executable, str(SCRIPT), str(source), "--packages", str(output), "--join", str(existing)], capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            packages = {element.attrib["id"]: element for element in ET.parse(output).findall("package")}
+            self.assertEqual(set(packages), {"Existing", "New"})
+            self.assertEqual(packages["New"].attrib["description"], "do not replace")
+
+    def test_join_packages_and_parts_for_board(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            board = tmp_path / "demo.kicad_pcb"
+            package_join, part_join = tmp_path / "packages.xml", tmp_path / "parts.xml"
+            board.write_text('''(kicad_pcb (version 20240108) (generator pcbnew)
+              (footprint "Resistor_SMD:R_0603" (property "Reference" "R1") (property "Value" "10k") (pad "1" smd rect (at 0 0) (size 1 1))))''')
+            package_join.write_text('<openpnp-packages><package id="Old"><footprint units="Millimeters"/></package></openpnp-packages>')
+            part_join.write_text('<openpnp-parts><part id="Old" package-id="Old"/></openpnp-parts>')
+            completed = subprocess.run([sys.executable, str(SCRIPT), str(board), "--join", str(package_join), "--join", str(part_join)], cwd=tmp_path, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(len(ET.parse(tmp_path / "packages.new.xml").findall("package")), 2)
+            self.assertEqual(len(ET.parse(tmp_path / "parts.new.xml").findall("part")), 2)

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kicad10-to-openpnp"
+version = "1.0.0"
+description = "KiCad 6-10 footprint and board converter for OpenPnP packages and parts"
+requires-python = ">=3.10"
+
+[project.scripts]
+kicad10_to_openpnp = "kicad_to_openpnp:main"
+kicad-to-openpnp = "kicad_to_openpnp:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
