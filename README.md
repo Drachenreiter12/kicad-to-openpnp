@@ -1,8 +1,8 @@
 # KiCad 10 to OpenPnP
 
 Convert KiCad footprints and boards into OpenPnP package and part definitions.
-The converter is dependency-free and runs on Python 3.10+; it does not require
-KiCad Python bindings.
+The converter is dependency-free and runs on Python 3.10+ (to at least 3.13); it does not require
+KiCad Python bindings. The Idea and parts of the Code were copied from https://github.com/mmalecki/kicad-to-openpnp , which was not compatible with KiCad 10.
 
 ## Install
 
