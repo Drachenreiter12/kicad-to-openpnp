@@ -69,6 +69,24 @@ kicad10_to_openpnp board.kicad_pcb \
 This writes `packages.new.xml` and `parts.new.xml`; it never overwrites the
 files supplied to `--join`.
 
+### Updating joined packages
+
+By default, matching package IDs are preserved. Use the safe update mode to
+add generated pads only when an existing package's `<footprint>` is completely
+empty; OpenPnP settings such as bottom vision and nozzle assignments are kept.
+Any packages that cannot be safely updated are listed on standard error and
+can also be saved to a file:
+
+```bash
+kicad10_to_openpnp board.kicad_pcb \
+  --join ~/.openpnp2/packages.xml \
+  --update-empty-packages --conflicts join-conflicts.txt
+```
+
+`--replace-packages` is the unsafe alternative: it completely replaces any
+joined package with the generated definition, including its OpenPnP-specific
+settings. Use it only when that loss is intended.
+
 ## Notes
 
 Package IDs use the KiCad footprint name. Part IDs use the KiCad Value, falling

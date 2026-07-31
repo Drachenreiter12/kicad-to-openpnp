@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -213,6 +214,14 @@ def read_join_files(paths: Sequence[Path]) -> dict[str, ET.Element]:
             raise ValueError(f"{path}: expected an OpenPnP packages.xml or parts.xml file")
         if root.tag in roots:
             raise ValueError(f"more than one --join file contains <{root.tag}>")
+        entity_tag = "package" if root.tag == "openpnp-packages" else "part"
+        ids: set[str] = set()
+        for element in root.findall(entity_tag):
+            entity_id = element.get("id")
+            if entity_id and entity_id in ids:
+                raise ValueError(f"{path}: duplicate {entity_tag} ID {entity_id!r}")
+            if entity_id:
+                ids.add(entity_id)
         roots[root.tag] = root
     return roots
 
@@ -230,6 +239,66 @@ def joined_root(tag: str, entity_tag: str, generated: Sequence[ET.Element], exis
         if element.get("id") not in existing_ids:
             result.append(element)
     return result
+
+
+def merge_empty_package_footprint(existing: ET.Element, generated: ET.Element) -> str | None:
+    """Add generated footprint data only when the existing footprint is empty.
+
+    Returns a conflict description when the existing package must not be
+    modified. Existing package attributes and OpenPnP configuration remain
+    untouched on a successful merge.
+    """
+    generated_footprint = generated.find("footprint")
+    if generated_footprint is None or not list(generated_footprint):
+        return "generated package has no pads"
+    existing_footprint = existing.find("footprint")
+    if existing_footprint is None:
+        existing.append(deepcopy(generated_footprint))
+        return None
+    if list(existing_footprint):
+        return "existing footprint is not empty"
+    for pad in generated_footprint:
+        existing_footprint.append(deepcopy(pad))
+    return None
+
+
+def joined_packages(generated: Sequence[ET.Element], existing: ET.Element | None,
+                    update_mode: str | None) -> tuple[ET.Element, list[str]]:
+    """Join packages and report IDs which could not safely be updated."""
+    if existing is None:
+        return joined_root("openpnp-packages", "package", generated, None), []
+    generated_by_id = {package.get("id", ""): package for package in generated}
+    result = ET.Element("openpnp-packages", existing.attrib)
+    conflicts: list[str] = []
+    seen_ids: set[str] = set()
+    for element in existing:
+        copied = deepcopy(element)
+        package_id_value = element.get("id", "") if element.tag == "package" else ""
+        replacement = generated_by_id.get(package_id_value)
+        if replacement is not None:
+            seen_ids.add(package_id_value)
+            if update_mode == "replace":
+                copied = deepcopy(replacement)
+            elif update_mode == "safe":
+                reason = merge_empty_package_footprint(copied, replacement)
+                if reason:
+                    conflicts.append(f"package {package_id_value!r}: {reason}")
+            else:
+                conflicts.append(f"package {package_id_value!r}: existing definition preserved")
+        result.append(copied)
+    for package in generated:
+        if package.get("id", "") not in seen_ids:
+            result.append(package)
+    return result, conflicts
+
+
+def report_conflicts(conflicts: Sequence[str], output: Path | None) -> None:
+    if not conflicts:
+        return
+    message = "\n".join(conflicts) + "\n"
+    if output is not None:
+        output.write_text(message, encoding="utf-8")
+    print(f"{len(conflicts)} join conflict(s):\n{message}".rstrip(), file=sys.stderr)
 
 
 def read_input(path: Path) -> list[Footprint]:
@@ -260,6 +329,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--no-parts", action="store_true", help="do not create parts.new.xml for board input")
     parser.add_argument("--join", type=Path, action="append", default=[], metavar="XML",
                         help="preserve definitions from an existing packages.xml or parts.xml (repeat for both)")
+    update_group = parser.add_mutually_exclusive_group()
+    update_group.add_argument("--update-empty-packages", action="store_true",
+                              help="with --join, add pads only to packages whose footprint is completely empty")
+    update_group.add_argument("--replace-packages", action="store_true",
+                              help="with --join, replace colliding package definitions entirely (unsafe)")
+    parser.add_argument("--conflicts", type=Path, metavar="FILE",
+                        help="write unresolved --join package conflicts to FILE")
     args = parser.parse_args(argv)
     input_sources = [source for source in (args.input, args.input_option, args.footprint, args.library) if source is not None]
     if len(input_sources) > 1:
@@ -274,6 +350,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.no_parts and args.parts:
         parser.error("--no-parts cannot be used with --parts")
     try:
+        if (args.update_empty_packages or args.replace_packages) and not args.join:
+            raise ValueError("--update-empty-packages and --replace-packages require --join")
+        if args.conflicts is not None and not args.join:
+            raise ValueError("--conflicts requires --join")
         if args.footprint is not None:
             if input_path.suffix.lower() != ".kicad_mod" or input_path.is_dir():
                 raise ValueError("--footprint requires a .kicad_mod file")
@@ -284,6 +364,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         for join in args.join:
             if join.resolve() in {packages.resolve(), *( [parts.resolve()] if parts else [])}:
                 raise ValueError(f"--join input {join} must not be the same as an output file")
+        if args.conflicts and args.conflicts.resolve() in {packages.resolve(), *( [parts.resolve()] if parts else [])}:
+            raise ValueError("--conflicts file must not be the same as an XML output file")
         if "openpnp-parts" in joins and parts is None:
             raise ValueError("a joined parts.xml file requires board input with parts output enabled")
         footprints = read_input(input_path)
@@ -291,9 +373,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         package_by_id: dict[str, Footprint] = {}
         for footprint in usable:
             package_by_id.setdefault(package_id(footprint.name), footprint)
-        package_root = joined_root("openpnp-packages", "package",
-                                   [package_element(footprint) for footprint in package_by_id.values()],
-                                   joins.get("openpnp-packages"))
+        update_mode = "safe" if args.update_empty_packages else "replace" if args.replace_packages else None
+        package_root, conflicts = joined_packages(
+            [package_element(footprint) for footprint in package_by_id.values()],
+            joins.get("openpnp-packages"), update_mode)
         write_xml(package_root, packages)
         if parts:
             if input_path.suffix.lower() != ".kicad_pcb":
@@ -310,6 +393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
             part_root = joined_root("openpnp-parts", "part", list(parts_by_id.values()), joins.get("openpnp-parts"))
             write_xml(part_root, parts)
+        report_conflicts(conflicts, args.conflicts)
     except (OSError, ValueError) as error:
         parser.error(str(error))
     return 0

@@ -4,7 +4,8 @@ _cache__/
 _venv/
 __pycache__/
 *.py[cod]
-
+*.egg-info/
+build/
 
 
 

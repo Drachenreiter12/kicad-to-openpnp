@@ -120,6 +120,68 @@ class ConverterTests(unittest.TestCase):
             self.assertEqual(set(packages), {"Existing", "New"})
             self.assertEqual(packages["New"].attrib["description"], "do not replace")
 
+    def test_safe_join_fills_empty_footprints_and_reports_nonempty_conflicts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            source, existing = tmp_path / "demo.kicad_mod", tmp_path / "packages.xml"
+            output, conflicts = tmp_path / "packages.new.xml", tmp_path / "conflicts.txt"
+            source.write_text('''(footprint "Demo"
+              (pad "1" smd rect (at -1 0) (size 1 1))
+              (pad "2" smd rect (at 1 0) (size 1 1)))''')
+            existing.write_text('''<openpnp-packages>
+              <package id="Demo" bottom-vision-id="configured"><footprint units="Millimeters"/></package>
+            </openpnp-packages>''')
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), str(source), "--packages", str(output), "--join", str(existing),
+                 "--update-empty-packages", "--conflicts", str(conflicts)], capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            package = ET.parse(output).find("package")
+            self.assertEqual(package.attrib["bottom-vision-id"], "configured")
+            self.assertEqual([pad.attrib["name"] for pad in package.findall("./footprint/pad")], ["1", "2"])
+            self.assertFalse(conflicts.exists())
+
+            existing.write_text('''<openpnp-packages>
+              <package id="Demo"><footprint units="Millimeters"><pad name="old"/></footprint></package>
+            </openpnp-packages>''')
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), str(source), "--packages", str(output), "--join", str(existing),
+                 "--update-empty-packages", "--conflicts", str(conflicts)], capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("existing footprint is not empty", conflicts.read_text())
+            self.assertIn("1 join conflict", completed.stderr)
+            self.assertEqual(ET.parse(output).find("./package/footprint/pad").attrib["name"], "old")
+
+    def test_yolo_join_replaces_existing_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            source, existing, output = tmp_path / "demo.kicad_mod", tmp_path / "packages.xml", tmp_path / "packages.new.xml"
+            source.write_text('(footprint "Demo" (pad "1" smd rect (at 0 0) (size 1 1)))')
+            existing.write_text('''<openpnp-packages>
+              <package id="Demo" bottom-vision-id="configured"><footprint units="Millimeters"><pad name="old"/></footprint></package>
+            </openpnp-packages>''')
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), str(source), "--packages", str(output), "--join", str(existing),
+                 "--replace-packages"], capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            package = ET.parse(output).find("package")
+            self.assertNotIn("bottom-vision-id", package.attrib)
+            self.assertEqual([pad.attrib["name"] for pad in package.findall("./footprint/pad")], ["1"])
+
+    def test_join_rejects_duplicate_existing_package_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            source, existing, output = tmp_path / "demo.kicad_mod", tmp_path / "packages.xml", tmp_path / "packages.new.xml"
+            source.write_text('(footprint "Demo" (pad "1" smd rect (at 0 0) (size 1 1)))')
+            existing.write_text('''<openpnp-packages>
+              <package id="Duplicate"><footprint units="Millimeters"/></package>
+              <package id="Duplicate"><footprint units="Millimeters"/></package>
+            </openpnp-packages>''')
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), str(source), "--packages", str(output), "--join", str(existing)],
+                capture_output=True, text=True)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("duplicate package ID 'Duplicate'", completed.stderr)
+
     def test_join_packages_and_parts_for_board(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)
