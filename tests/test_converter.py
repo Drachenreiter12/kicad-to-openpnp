@@ -43,6 +43,43 @@ class ConverterTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(ET.parse(output).find("./package").attrib["id"], "A")
 
+    def test_explicit_footprint_and_library_commands_create_packages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            footprint = tmp_path / "Demo.kicad_mod"
+            library = tmp_path / "Demo.pretty"
+            library.mkdir()
+            footprint.write_text('(footprint "Single" (pad "1" smd rect (at 0 0) (size 1 1)))')
+            (library / "Library.kicad_mod").write_text(
+                '(footprint "Library" (pad "A" smd oval (at 1 2) (size 2 1)))')
+
+            single_output = tmp_path / "single.xml"
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), "--footprint", str(footprint), "--packages", str(single_output)],
+                capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(ET.parse(single_output).find("package").attrib["id"], "Single")
+
+            library_output = tmp_path / "library.xml"
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), "--library", str(library), "--packages", str(library_output)],
+                capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            pad = ET.parse(library_output).find("./package/footprint/pad")
+            self.assertEqual(pad.attrib, {"name": "A", "x": "1", "y": "-2", "width": "2", "height": "1", "rotation": "0", "mark": "false", "roundness": "100"})
+
+    def test_explicit_footprint_and_library_commands_validate_input_type(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            source = tmp_path / "not-a-footprint.txt"
+            output = tmp_path / "packages.xml"
+            source.write_text("ignored")
+            completed = subprocess.run(
+                [sys.executable, str(SCRIPT), "--footprint", str(source), "--packages", str(output)],
+                capture_output=True, text=True)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--footprint requires a .kicad_mod file", completed.stderr)
+
     def test_board_creates_deduplicated_parts(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)

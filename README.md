@@ -25,7 +25,20 @@ This creates these files in the current directory:
 - `packages.new.xml` — OpenPnP package definitions
 - `parts.new.xml` — OpenPnP part definitions
 
-Convert one footprint or a `.pretty` footprint library:
+Convert a single KiCad 10 footprint directly to an OpenPnP packages file:
+
+```bash
+kicad10_to_openpnp --footprint Connector_USB.pretty/USB_C_Receptacle.kicad_mod
+```
+
+Convert every footprint in a KiCad `.pretty` library directly to packages and
+pads:
+
+```bash
+kicad10_to_openpnp --footprint-library Connector_USB.pretty
+```
+
+The positional input continues to accept either form too:
 
 ```bash
 kicad10_to_openpnp MyFootprints.pretty
@@ -61,3 +74,9 @@ files supplied to `--join`.
 Package IDs use the KiCad footprint name. Part IDs use the KiCad Value, falling
 back to the Reference. Check component heights and nozzle assignments in
 OpenPnP before assembling a board.
+
+Most changes to the original author's code were made with AI assistance.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

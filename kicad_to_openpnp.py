@@ -233,6 +233,7 @@ def joined_root(tag: str, entity_tag: str, generated: Sequence[ET.Element], exis
 
 
 def read_input(path: Path) -> list[Footprint]:
+    """Read a board, one footprint, or every footprint in a .pretty library."""
     files = sorted(path.glob("*.kicad_mod")) if path.is_dir() else [path]
     if not files:
         raise ValueError(f"no .kicad_mod files found in {path}")
@@ -250,15 +251,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", nargs="?", type=Path, help=".kicad_mod, .kicad_pcb, or directory of .kicad_mod files")
     parser.add_argument("--input", "-i", dest="input_option", type=Path, help="input path (legacy spelling)")
+    parser.add_argument("--footprint", "--single-footprint", "-f", type=Path, metavar="PATH",
+                        help="convert one .kicad_mod footprint to an OpenPnP packages XML file")
+    parser.add_argument("--library", "--footprint-library", "-l", type=Path, metavar="PATH",
+                        help="convert every .kicad_mod in a KiCad .pretty library to OpenPnP packages")
     parser.add_argument("--packages", "--output", "-o", type=Path, help="packages output (default: packages.new.xml)")
     parser.add_argument("--parts", type=Path, help="parts output (default for boards: parts.new.xml)")
     parser.add_argument("--no-parts", action="store_true", help="do not create parts.new.xml for board input")
     parser.add_argument("--join", type=Path, action="append", default=[], metavar="XML",
                         help="preserve definitions from an existing packages.xml or parts.xml (repeat for both)")
     args = parser.parse_args(argv)
-    if args.input and args.input_option:
-        parser.error("use either the positional input or --input, not both")
-    input_path = args.input or args.input_option
+    input_sources = [source for source in (args.input, args.input_option, args.footprint, args.library) if source is not None]
+    if len(input_sources) > 1:
+        parser.error("use exactly one input: positional input, --input, --footprint, or --library")
+    input_path = input_sources[0] if input_sources else None
     if input_path is None:
         parser.error("an input path is required")
     packages = args.packages or Path("packages.new.xml")
@@ -268,6 +274,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.no_parts and args.parts:
         parser.error("--no-parts cannot be used with --parts")
     try:
+        if args.footprint is not None:
+            if input_path.suffix.lower() != ".kicad_mod" or input_path.is_dir():
+                raise ValueError("--footprint requires a .kicad_mod file")
+        if args.library is not None:
+            if not input_path.is_dir() or input_path.suffix.lower() != ".pretty":
+                raise ValueError("--library requires a KiCad .pretty directory")
         joins = read_join_files(args.join)
         for join in args.join:
             if join.resolve() in {packages.resolve(), *( [parts.resolve()] if parts else [])}:
