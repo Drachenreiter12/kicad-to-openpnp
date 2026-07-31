@@ -1,3 +1,0 @@
-[console_scripts]
-kicad-to-openpnp = kicad_to_openpnp:main
-kicad10_to_openpnp = kicad_to_openpnp:main
