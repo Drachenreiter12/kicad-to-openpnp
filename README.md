@@ -46,6 +46,18 @@ kicad10_to_openpnp MyFootprints.pretty
 
 This creates `packages.new.xml`.
 
+### Generated package data
+
+For each package, the converter writes KiCad pad positions and dimensions,
+plus the physical body width and height from the footprint's `F.Fab` outline
+when available. It reads fabrication rectangles, lines, polygons, circles, and
+arc geometry. This body size helps OpenPnP vision distinguish the component
+body from its pads.
+
+Package IDs retain KiCad's full `library:footprint` name. Part IDs are written
+as `package:value`; common metric passive and LED footprints use their standard
+imperial code, such as `0603:100n`, `0805:10kR`, or `1206:LED`.
+
 Choose different output files if needed:
 
 ```bash
