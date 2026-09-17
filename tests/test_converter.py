@@ -5,6 +5,8 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import kicad_to_openpnp as converter
+
 
 SCRIPT = Path(__file__).parents[1] / "kicad_to_openpnp.py"
 
@@ -90,7 +92,31 @@ class ConverterTests(unittest.TestCase):
               (footprint "Resistor_SMD:R_0603" (property "Reference" "R2") (property "Value" "10k") (pad "1" smd rect (at 0 0) (size 1 1))))''')
             completed = subprocess.run([sys.executable, str(SCRIPT), "-i", str(board), "-o", str(packages), "--parts", str(parts)], capture_output=True, text=True)
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(ET.parse(parts).findall("part")[0].attrib["package-id"], "R_0603")
+            part = ET.parse(parts).findall("part")[0]
+            self.assertEqual(part.attrib["package-id"], "Resistor_SMD:R_0603")
+            self.assertEqual(part.attrib["id"], "R_0603:10k")
+
+    def test_standard_footprint_replaces_hand_solder_variant_and_normalizes_part_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            library = tmp_path / "Capacitor_SMD.pretty"
+            library.mkdir()
+            (library / "C_0603_1608Metric.kicad_mod").write_text(
+                '(footprint "C_0603_1608Metric" (pad "1" smd rect (at -1 0) (size 1 1)))')
+            source = converter.Footprint(
+                "Capacitor_SMD:C_0603_1608Metric_Pad1.08x0.95mm_HandSolder", (), "C1", "100n")
+            canonical = converter.canonical_footprint(source, [tmp_path])
+            self.assertEqual(canonical.name, "Capacitor_SMD:C_0603_1608Metric")
+            self.assertEqual(canonical.pads[0].x, -1)
+            package = converter.package_element(canonical)
+            part = converter.part_element(canonical, package.attrib["id"])
+            self.assertEqual(package.attrib["id"], "Capacitor_SMD:C_0603_1608Metric")
+            self.assertEqual(part.attrib["id"], "0603:100n")
+
+    def test_canonical_names_remove_long_pad_variant(self):
+        self.assertEqual(
+            converter.canonical_footprint_name("Package_DIP:DIP-16_W7.62mm_LongPads"),
+            "Package_DIP:DIP-16_W7.62mm")
 
     def test_board_defaults_match_pipx_command(self):
         with tempfile.TemporaryDirectory() as directory:

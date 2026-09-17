@@ -89,9 +89,20 @@ settings. Use it only when that loss is intended.
 
 ## Notes
 
-Package IDs use the KiCad footprint name. Part IDs use the KiCad Value, falling
-back to the Reference. Check component heights and nozzle assignments in
-OpenPnP before assembling a board.
+Package IDs use KiCad's full `library:footprint` name. Part IDs use
+`package:value`, falling back to the Reference; common metric passive and LED
+footprints use their imperial package code, for example `0603:100n`,
+`0805:10kR`, and `1206:LED`. This keeps otherwise ambiguous KiCad values such
+as `LED` distinct by package.
+
+When KiCad's standard footprint library is installed, the converter uses its
+base footprint for variants intended for hand soldering or long pads. For
+example, `C_0603_1608Metric_Pad1.08x0.95mm_HandSolder` becomes
+`Capacitor_SMD:C_0603_1608Metric`, and `DIP-16_W7.62mm_LongPads` becomes
+`Package_DIP:DIP-16_W7.62mm`. The footprint library is found through
+`KICAD10_FOOTPRINT_DIR`, `KICAD_FOOTPRINT_DIR`, or KiCad's standard Linux
+install locations. Check component heights and nozzle assignments in OpenPnP
+before assembling a board.
 
 Most changes to the original author's code were made with AI assistance.
 

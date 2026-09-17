@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -156,8 +158,57 @@ def footprint_from_sexpr(node: SExpr) -> Footprint:
 
 
 def package_id(name: str) -> str:
-    """Use the library footprint name, without the KiCad library prefix."""
-    return name.rsplit(":", 1)[-1]
+    """Use KiCad's fully qualified (library:footprint) package name."""
+    return name
+
+
+def canonical_footprint_name(name: str) -> str:
+    """Remove KiCad's assembly-oriented pad variants from a footprint name."""
+    library, separator, footprint = name.rpartition(":")
+    if not separator:
+        return name
+    footprint = re.sub(r"_Pad[^_]*_HandSolder$", "", footprint)
+    footprint = re.sub(r"_HandSolder$", "", footprint)
+    footprint = re.sub(r"_LongPads$", "", footprint)
+    return f"{library}:{footprint}"
+
+
+def standard_footprint_roots() -> tuple[Path, ...]:
+    """Return the usual KiCad footprint-library locations, in priority order."""
+    roots = [Path(value) for variable in ("KICAD10_FOOTPRINT_DIR", "KICAD_FOOTPRINT_DIR")
+             if (value := os.environ.get(variable))]
+    roots.extend((Path("/usr/share/kicad/footprints"), Path("/usr/local/share/kicad/footprints")))
+    return tuple(roots)
+
+
+def standard_footprint_path(name: str, roots: Sequence[Path] | None = None) -> Path | None:
+    """Locate a fully-qualified KiCad footprint in its standard library."""
+    library, separator, footprint = name.partition(":")
+    if not separator:
+        return None
+    for root in roots or standard_footprint_roots():
+        path = root / f"{library}.pretty" / f"{footprint}.kicad_mod"
+        if path.is_file():
+            return path
+    return None
+
+
+def canonical_footprint(footprint: Footprint, roots: Sequence[Path] | None = None) -> Footprint:
+    """Use the standard, non-assembly KiCad footprint when one is available."""
+    name = canonical_footprint_name(footprint.name)
+    path = standard_footprint_path(name, roots)
+    if path is None:
+        return Footprint(name, footprint.pads, footprint.reference, footprint.value)
+    document = parse(path.read_text(encoding="utf-8"))
+    standard = footprint_from_sexpr(document)
+    return Footprint(name, standard.pads, footprint.reference, footprint.value)
+
+
+def part_package_name(name: str) -> str:
+    """Use conventional passive package codes where KiCad provides one."""
+    footprint = name.rsplit(":", 1)[-1]
+    match = re.search(r"(?:^|_)(\d{4})_\d{4}Metric(?:_|$)", footprint)
+    return match.group(1) if match else footprint
 
 
 def package_element(footprint: Footprint) -> ET.Element:
@@ -175,7 +226,8 @@ def package_element(footprint: Footprint) -> ET.Element:
 
 
 def part_element(footprint: Footprint, package: str) -> ET.Element:
-    part_id = footprint.value or footprint.reference or package
+    value = footprint.value or footprint.reference or package
+    part_id = f"{part_package_name(footprint.name)}:{value}"
     return ET.Element("part", id=part_id, **{
         "height-units": "Millimeters", "height": "0.0",
         "through-board-depth-units": "Millimeters", "through-board-depth": "0.0",
@@ -368,7 +420,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("--conflicts file must not be the same as an XML output file")
         if "openpnp-parts" in joins and parts is None:
             raise ValueError("a joined parts.xml file requires board input with parts output enabled")
-        footprints = read_input(input_path)
+        footprints = [canonical_footprint(footprint) for footprint in read_input(input_path)]
         usable = [footprint for footprint in footprints if footprint.pads]
         package_by_id: dict[str, Footprint] = {}
         for footprint in usable:
