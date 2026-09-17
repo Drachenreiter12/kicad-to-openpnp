@@ -119,6 +119,8 @@ class Footprint:
     pads: tuple[Pad, ...]
     reference: str = ""
     value: str = ""
+    body_width: float | None = None
+    body_height: float | None = None
 
 
 def pad_from_sexpr(node: SExpr) -> Pad | None:
@@ -145,6 +147,42 @@ def pad_from_sexpr(node: SExpr) -> Pad | None:
     return Pad(name, x, y, width, height, rotation, roundness)
 
 
+def point(node: SExpr | None, context: str) -> tuple[float, float] | None:
+    if node is None or len(node) < 3:
+        return None
+    return number(atom(node, 1), f"{context} x"), number(atom(node, 2), f"{context} y")
+
+
+def fab_body_dimensions(node: SExpr) -> tuple[float, float] | None:
+    """Return the F.Fab outline's X/Y bounding-box dimensions in millimeters."""
+    points: list[tuple[float, float]] = []
+    for graphic in node:
+        if not isinstance(graphic, list) or not graphic or not isinstance(graphic[0], str):
+            continue
+        kind = graphic[0]
+        if kind not in {"fp_rect", "fp_line", "fp_poly", "fp_circle", "fp_arc"} or atom(child(graphic, "layer"), 1) != "F.Fab":
+            continue
+        if kind == "fp_circle":
+            center = point(child(graphic, "center"), "F.Fab circle center")
+            edge = point(child(graphic, "end"), "F.Fab circle end")
+            if center and edge:
+                radius = ((edge[0] - center[0]) ** 2 + (edge[1] - center[1]) ** 2) ** 0.5
+                points.extend(((center[0] - radius, center[1] - radius), (center[0] + radius, center[1] + radius)))
+            continue
+        names = ("start", "end") if kind in {"fp_rect", "fp_line"} else ("start", "mid", "end")
+        for name in names:
+            if coordinate := point(child(graphic, name), f"F.Fab {kind}"):
+                points.append(coordinate)
+        if kind == "fp_poly":
+            for polygon_point in children(child(graphic, "pts") or [], "xy"):
+                if coordinate := point(polygon_point, "F.Fab polygon"):
+                    points.append(coordinate)
+    if len(points) < 2:
+        return None
+    xs, ys = zip(*points)
+    return max(xs) - min(xs), max(ys) - min(ys)
+
+
 def footprint_from_sexpr(node: SExpr) -> Footprint:
     if len(node) < 2 or not isinstance(node[1], str):
         raise ValueError("footprint has no name")
@@ -154,7 +192,9 @@ def footprint_from_sexpr(node: SExpr) -> Footprint:
     for text in children(node, "fp_text"):
         if atom(text, 1) in {"reference", "value"}:
             properties.setdefault(atom(text, 1).title(), atom(text, 2))
-    return Footprint(node[1], pads, properties.get("Reference", ""), properties.get("Value", ""))
+    dimensions = fab_body_dimensions(node)
+    return Footprint(node[1], pads, properties.get("Reference", ""), properties.get("Value", ""),
+                     *(dimensions or (None, None)))
 
 
 def package_id(name: str) -> str:
@@ -198,10 +238,12 @@ def canonical_footprint(footprint: Footprint, roots: Sequence[Path] | None = Non
     name = canonical_footprint_name(footprint.name)
     path = standard_footprint_path(name, roots)
     if path is None:
-        return Footprint(name, footprint.pads, footprint.reference, footprint.value)
+        return Footprint(name, footprint.pads, footprint.reference, footprint.value,
+                         footprint.body_width, footprint.body_height)
     document = parse(path.read_text(encoding="utf-8"))
     standard = footprint_from_sexpr(document)
-    return Footprint(name, standard.pads, footprint.reference, footprint.value)
+    return Footprint(name, standard.pads, footprint.reference, footprint.value,
+                     standard.body_width, standard.body_height)
 
 
 def part_package_name(name: str) -> str:
@@ -213,7 +255,11 @@ def part_package_name(name: str) -> str:
 
 def package_element(footprint: Footprint) -> ET.Element:
     package = ET.Element("package", version="1.1", id=package_id(footprint.name))
-    xml_footprint = ET.SubElement(package, "footprint", units="Millimeters")
+    attributes = {"units": "Millimeters"}
+    if footprint.body_width is not None and footprint.body_height is not None:
+        attributes["body-width"] = fmt(footprint.body_width)
+        attributes["body-height"] = fmt(footprint.body_height)
+    xml_footprint = ET.SubElement(package, "footprint", attributes)
     for pad in footprint.pads:
         # KiCad coordinates have positive Y down; OpenPnP package coordinates
         # have positive Y up. Rotation is retained: OpenPnP stores the same

@@ -101,8 +101,10 @@ example, `C_0603_1608Metric_Pad1.08x0.95mm_HandSolder` becomes
 `Capacitor_SMD:C_0603_1608Metric`, and `DIP-16_W7.62mm_LongPads` becomes
 `Package_DIP:DIP-16_W7.62mm`. The footprint library is found through
 `KICAD10_FOOTPRINT_DIR`, `KICAD_FOOTPRINT_DIR`, or KiCad's standard Linux
-install locations. Check component heights and nozzle assignments in OpenPnP
-before assembling a board.
+install locations. When a footprint has an `F.Fab` body outline, its bounding
+box is exported as OpenPnP `body-width` and `body-height` for vision use; for
+example, the standard 0603 is `1.6 × 0.8 mm`. Check component heights and
+nozzle assignments in OpenPnP before assembling a board.
 
 Most changes to the original author's code were made with AI assistance.
 

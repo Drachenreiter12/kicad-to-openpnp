@@ -102,7 +102,9 @@ class ConverterTests(unittest.TestCase):
             library = tmp_path / "Capacitor_SMD.pretty"
             library.mkdir()
             (library / "C_0603_1608Metric.kicad_mod").write_text(
-                '(footprint "C_0603_1608Metric" (pad "1" smd rect (at -1 0) (size 1 1)))')
+                '''(footprint "C_0603_1608Metric"
+                  (fp_rect (start -0.8 -0.4) (end 0.8 0.4) (layer "F.Fab"))
+                  (pad "1" smd rect (at -1 0) (size 1 1)))''')
             source = converter.Footprint(
                 "Capacitor_SMD:C_0603_1608Metric_Pad1.08x0.95mm_HandSolder", (), "C1", "100n")
             canonical = converter.canonical_footprint(source, [tmp_path])
@@ -112,11 +114,22 @@ class ConverterTests(unittest.TestCase):
             part = converter.part_element(canonical, package.attrib["id"])
             self.assertEqual(package.attrib["id"], "Capacitor_SMD:C_0603_1608Metric")
             self.assertEqual(part.attrib["id"], "0603:100n")
+            self.assertEqual(package.find("footprint").attrib["body-width"], "1.6")
+            self.assertEqual(package.find("footprint").attrib["body-height"], "0.8")
 
     def test_canonical_names_remove_long_pad_variant(self):
         self.assertEqual(
             converter.canonical_footprint_name("Package_DIP:DIP-16_W7.62mm_LongPads"),
             "Package_DIP:DIP-16_W7.62mm")
+
+    def test_fab_lines_define_body_dimensions(self):
+        footprint = converter.footprint_from_sexpr(converter.parse('''(footprint "LED"
+          (fp_line (start -1.6 -0.8) (end -1.6 0.8) (layer "F.Fab"))
+          (fp_line (start -1.6 0.8) (end 1.6 0.8) (layer "F.Fab"))
+          (fp_line (start 1.6 0.8) (end 1.6 -0.8) (layer "F.Fab"))
+          (fp_line (start 1.6 -0.8) (end -1.6 -0.8) (layer "F.Fab"))
+          (pad "1" smd rect (at 0 0) (size 1 1)))'''))
+        self.assertEqual((footprint.body_width, footprint.body_height), (3.2, 1.6))
 
     def test_board_defaults_match_pipx_command(self):
         with tempfile.TemporaryDirectory() as directory:
