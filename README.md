@@ -54,9 +54,12 @@ when available. It reads fabrication rectangles, lines, polygons, circles, and
 arc geometry. This body size helps OpenPnP vision distinguish the component
 body from its pads.
 
-Package IDs retain KiCad's full `library:footprint` name. Part IDs are written
-as `package:value`; common metric passive and LED footprints use their standard
-imperial code, such as `0603:100n`, `0805:10kR`, or `1206:LED`.
+Standard KiCad packages use compact IDs: `C_0603_1608Metric` becomes `0603`,
+`SOT-23` remains `SOT-23`, and `DIP-16_W7.62mm` becomes `DIP-16`. Custom or
+unrecognized footprints retain their full `library:footprint` name. Part IDs
+are written as `identifier:package:value` when the KiCad footprint has a
+reference designator, or `package:value` otherwise. The identifier is the
+reference prefix: for example `C:0603:100n`, `R:0805:10kR`, or `D:1206:LED`.
 
 Choose different output files if needed:
 
@@ -101,10 +104,10 @@ settings. Use it only when that loss is intended.
 
 ## Notes
 
-Package IDs use KiCad's full `library:footprint` name. Part IDs use
-`package:value`, falling back to the Reference; common metric passive and LED
-footprints use their imperial package code, for example `0603:100n`,
-`0805:10kR`, and `1206:LED`. This keeps otherwise ambiguous KiCad values such
+Package IDs use the shortest conventional identifier for standard KiCad
+footprints and the full `library:footprint` name for custom ones. Part IDs use
+`identifier:package:value` when a reference is present, falling back to
+`package:value` otherwise. This keeps otherwise ambiguous KiCad values such
 as `LED` distinct by package.
 
 When KiCad's standard footprint library is installed, the converter uses its

@@ -94,7 +94,7 @@ class ConverterTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             part = ET.parse(parts).findall("part")[0]
             self.assertEqual(part.attrib["package-id"], "Resistor_SMD:R_0603")
-            self.assertEqual(part.attrib["id"], "R_0603:10k")
+            self.assertEqual(part.attrib["id"], "R:Resistor_SMD:R_0603:10k")
 
     def test_standard_footprint_replaces_hand_solder_variant_and_normalizes_part_name(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -112,8 +112,8 @@ class ConverterTests(unittest.TestCase):
             self.assertEqual(canonical.pads[0].x, -1)
             package = converter.package_element(canonical)
             part = converter.part_element(canonical, package.attrib["id"])
-            self.assertEqual(package.attrib["id"], "Capacitor_SMD:C_0603_1608Metric")
-            self.assertEqual(part.attrib["id"], "0603:100n")
+            self.assertEqual(package.attrib["id"], "0603")
+            self.assertEqual(part.attrib["id"], "C:0603:100n")
             self.assertEqual(package.find("footprint").attrib["body-width"], "1.6")
             self.assertEqual(package.find("footprint").attrib["body-height"], "0.8")
 
@@ -121,6 +121,20 @@ class ConverterTests(unittest.TestCase):
         self.assertEqual(
             converter.canonical_footprint_name("Package_DIP:DIP-16_W7.62mm_LongPads"),
             "Package_DIP:DIP-16_W7.62mm")
+
+    def test_standard_packages_use_compact_identifiers(self):
+        self.assertEqual(converter.package_id(converter.Footprint(
+            "LED_SMD:LED_1206_3216Metric", (), standard=True)), "1206")
+        self.assertEqual(converter.package_id(converter.Footprint(
+            "Package_TO_SOT_SMD:SOT-23", (), standard=True)), "SOT-23")
+        self.assertEqual(converter.package_id(converter.Footprint(
+            "Package_DIP:DIP-16_W7.62mm", (), standard=True)), "DIP-16")
+
+    def test_part_identifier_uses_kicad_reference_prefix_when_available(self):
+        with_reference = converter.part_element(converter.Footprint("Demo", (), "D7", "LED"), "1206")
+        without_reference = converter.part_element(converter.Footprint("Demo", (), value="LED"), "1206")
+        self.assertEqual(with_reference.attrib["id"], "D:1206:LED")
+        self.assertEqual(without_reference.attrib["id"], "1206:LED")
 
     def test_fab_lines_define_body_dimensions(self):
         footprint = converter.footprint_from_sexpr(converter.parse('''(footprint "LED"

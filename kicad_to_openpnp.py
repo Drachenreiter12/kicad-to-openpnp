@@ -121,6 +121,7 @@ class Footprint:
     value: str = ""
     body_width: float | None = None
     body_height: float | None = None
+    standard: bool = False
 
 
 def pad_from_sexpr(node: SExpr) -> Pad | None:
@@ -197,8 +198,17 @@ def footprint_from_sexpr(node: SExpr) -> Footprint:
                      *(dimensions or (None, None)))
 
 
-def package_id(name: str) -> str:
-    """Use KiCad's fully qualified (library:footprint) package name."""
+def package_id(footprint: Footprint) -> str:
+    """Use a compact standard package code, or the full custom KiCad name."""
+    if not footprint.standard:
+        return footprint.name
+    name = footprint.name.rsplit(":", 1)[-1]
+    if match := re.search(r"(?:^|_)(\d{4})_\d{4}Metric(?:_|$)", name):
+        return match.group(1)
+    if match := re.search(r"\b(SOT-\d+)\b", name):
+        return match.group(1)
+    if match := re.match(r"(DIP-\d+)_", name):
+        return match.group(1)
     return name
 
 
@@ -239,22 +249,15 @@ def canonical_footprint(footprint: Footprint, roots: Sequence[Path] | None = Non
     path = standard_footprint_path(name, roots)
     if path is None:
         return Footprint(name, footprint.pads, footprint.reference, footprint.value,
-                         footprint.body_width, footprint.body_height)
+                         footprint.body_width, footprint.body_height, False)
     document = parse(path.read_text(encoding="utf-8"))
     standard = footprint_from_sexpr(document)
     return Footprint(name, standard.pads, footprint.reference, footprint.value,
-                     standard.body_width, standard.body_height)
-
-
-def part_package_name(name: str) -> str:
-    """Use conventional passive package codes where KiCad provides one."""
-    footprint = name.rsplit(":", 1)[-1]
-    match = re.search(r"(?:^|_)(\d{4})_\d{4}Metric(?:_|$)", footprint)
-    return match.group(1) if match else footprint
+                     standard.body_width, standard.body_height, True)
 
 
 def package_element(footprint: Footprint) -> ET.Element:
-    package = ET.Element("package", version="1.1", id=package_id(footprint.name))
+    package = ET.Element("package", version="1.1", id=package_id(footprint))
     attributes = {"units": "Millimeters"}
     if footprint.body_width is not None and footprint.body_height is not None:
         attributes["body-width"] = fmt(footprint.body_width)
@@ -273,7 +276,9 @@ def package_element(footprint: Footprint) -> ET.Element:
 
 def part_element(footprint: Footprint, package: str) -> ET.Element:
     value = footprint.value or footprint.reference or package
-    part_id = f"{part_package_name(footprint.name)}:{value}"
+    reference_prefix = re.match(r"[A-Za-z]+", footprint.reference)
+    identifier = reference_prefix.group(0) if reference_prefix else ""
+    part_id = ":".join(item for item in (identifier, package, value) if item)
     return ET.Element("part", id=part_id, **{
         "height-units": "Millimeters", "height": "0.0",
         "through-board-depth-units": "Millimeters", "through-board-depth": "0.0",
@@ -470,7 +475,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         usable = [footprint for footprint in footprints if footprint.pads]
         package_by_id: dict[str, Footprint] = {}
         for footprint in usable:
-            package_by_id.setdefault(package_id(footprint.name), footprint)
+            identifier = package_id(footprint)
+            existing = package_by_id.setdefault(identifier, footprint)
+            if existing != footprint and (existing.pads != footprint.pads or
+                                          existing.body_width != footprint.body_width or
+                                          existing.body_height != footprint.body_height):
+                raise ValueError(
+                    f"KiCad footprints {existing.name!r} and {footprint.name!r} both map to package "
+                    f"{identifier!r} but have different geometry; use distinct package names")
         update_mode = "safe" if args.update_empty_packages else "replace" if args.replace_packages else None
         package_root, conflicts = joined_packages(
             [package_element(footprint) for footprint in package_by_id.values()],
@@ -481,7 +493,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ValueError("--parts requires a .kicad_pcb input")
             parts_by_id: dict[str, ET.Element] = {}
             for footprint in usable:
-                part = part_element(footprint, package_id(footprint.name))
+                part = part_element(footprint, package_id(footprint))
                 existing = parts_by_id.setdefault(part.get("id", ""), part)
                 if existing.get("package-id") != part.get("package-id"):
                     raise ValueError(
